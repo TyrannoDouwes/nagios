@@ -1,0 +1,51 @@
+#!/bin/bash
+#
+# Generate the graphs for the diskusage.
+# The RRD filename is expected to be:
+#   <hostname>-diskusage-<mountpoint>.rrd
+# The hostname can also be an IP address, but mixed names will not be combined.
+# In the mountpoint the '_' character will be replaced by a '/' character.
+
+. rrd-stats.conf create || exit 3
+
+cd $STATSDIR
+files=$(ls *-diskusage-*.rrd)
+
+for rrdfile in $files; do
+
+	hostname=$(get_hostname $rrdfile)
+
+	# Get the name of the mountpoint
+	filesystem=$(basename ${rrdfile#*-diskusage-} .rrd)
+	[ "$filesystem" = "root" ] && fs="/" || fs="/$(sed 's/_/\//g' <<< $filesystem)"
+
+	# Set the titles and filenames for the graphs
+	titles=( "$DISKUSAGE_TITLE $fs the past day" \
+		"$DISKUSAGE_TITLE $fs the past week" \
+		"$DISKUSAGE_TITLE $fs the past month")
+
+	filenames=("${pngdir}/${hostname}-diskusage-${filesystem}-day.png"	\
+		"${pngdir}/${hostname}-diskusage-${filesystem}-week.png"	\
+		"${pngdir}/${hostname}-diskusage-${filesystem}-month.png")
+
+	# Create a header for the webpage
+	echo "Disk and inode usage of $fs" > ${pngdir}/${hostname}-diskusage-${filesystem}.header
+
+	# Now create 3 graphs
+	for i in 0 1 2; do
+	rrdtool graph ${filenames[$i]}                        \
+		--start ${START_TIMES[$i]} --end $END_TIME    \
+		--vertical-label 'diskusage %'                \
+		--title "${titles[$i]}"                       \
+		--height $GRAPH_HEIGHT                        \
+		--width $GRAPH_WIDTH                          \
+		--upper-limit 100                             \
+		--lower-limit 0                               \
+		--rigid                                       \
+		DEF:diskspace=${rrdfile}:diskspace:MAX        \
+		DEF:inodes=${rrdfile}:inodes:MAX              \
+		LINE2:diskspace#000000:"used diskspace"       \
+		LINE2:inodes#00FF00:"used inodes"             > /dev/null 2>&1
+	done
+done
+

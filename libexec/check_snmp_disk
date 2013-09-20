@@ -1,0 +1,99 @@
+#!/bin/bash
+#
+# Nagios plugin to check the diskspace on a remote server using SNMP.
+# The script will also store the values in a RRDtool database.
+
+. errorcodes.conf
+
+usage () {
+	echo "$(basename $0) -H <hostname> -w <% free> -c <% free> <mountpoint>"
+	echo ""
+	echo "               -w WARNING if lower than %free"
+	echo "               -c CRITICAL if lower than %free"
+	exit $STATE_UNKNOWN
+}
+
+while getopts "H:w:c:" Option; do
+	case $Option in
+		H)
+			HOST=$OPTARG
+			;;
+		w)
+			WARNING=$OPTARG
+			;;
+		c)
+			CRITICAL=$OPTARG
+			;;
+		*)
+			usage
+			;;
+	esac
+done
+
+shift $((OPTIND - 1))
+DISK=$1
+
+[ "$HOST" -a "$DISK" -a "$WARNING" -a "$CRITICAL" ] || usage
+
+if [ $WARNING -lt $CRITICAL ]; then
+	echo "WARNING can't be smaller than CRITICAL"
+	exit $STATE_UNKNOWN
+fi
+
+diskname=${DISK##/}
+diskname=$(sed "s?[ /]?_?g" <<<${diskname:-root})
+. $(dirname $0)/snmp-plugins.conf "diskusage" "$diskname" || exit $STATE_UNKNOWN
+
+#==================================================================
+
+# Get index for the requested partition.
+
+result=$(snmpwalk -v2c -cpublic $HOST $MIB_STORAGELABEL | grep " $DISK$")
+[ $? -ne 0 ] && exit $STATE_UNKNOWN
+
+index=$(sed "s/^$MIB_STORAGELABEL.\([0-9]*\).*$/\1/" <<<$result)
+
+
+# Now get the percentage used diskspace
+
+result=$(snmpget -v2c -cpublic -Ov $HOST $MIB_STORAGEUSED.$index)
+[ "$result" = "" ] && exit $STATE_UNKNOWN
+usedpercentage=${result##INTEGER: }
+
+# Now get the free space in KB and convert it into the largest possible unit
+
+result=$(snmpget -v2c -cpublic -Ov $HOST $MIB_STORAGEFREE.$index)
+[ "$result" = "" ] && exit $STATE_UNKNOWN
+freespace=${result##INTEGER: }
+freespacemsg="$freespace KB"
+[ $freespace -ge 1024 ] && freespacemsg="$((freespace / 1024)) MB"
+[ $freespace -ge 1048576 ] && freespacemsg="$((freespace / 1048576)) GB"
+[ $freespace -ge 1073741824 ] && freespacemsg="$((freespace / 1073741824)) TB"
+
+# Now get the percentage inodes used
+
+result=$(snmpget -v2c -cpublic -Ov $HOST $MIB_INODESUSED.$index)
+[ "$result" = "" ] && exit $STATE_UNKNOWN
+usedinodes=${result##INTEGER: }
+
+# And finally the percentage free diskspace
+
+freepercentage=$(( 100 - usedpercentage ))
+freeinodes=$((100 - usedinodes))
+
+retmsg="Free space on ${DISK}: ${freepercentage}% = $freespacemsg (inodes = ${freeinodes}%)"
+retcode=$STATE_OK
+[ $freepercentage -le $WARNING ] && retcode=$STATE_WARNING
+[ $freepercentage -le $CRITICAL ] && retcode=$STATE_CRITICAL
+
+#-------------------------------------------------------------------------------------
+# RRD stuff for nice graphics
+
+[ "$RRDFILE" ] && rrdtool update $RRDFILE N:${usedpercentage}:${usedinodes} >/dev/null 2>&1
+
+#
+#-------------------------------------------------------------------------------------
+
+echo $retmsg
+exit $retcode
+

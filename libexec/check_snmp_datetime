@@ -1,0 +1,67 @@
+#!/bin/bash
+#
+# Nagios plugin to check the date of a remote server using SNMP.
+
+# Load the settings for Nagios plugins. Needed here for the exit state variables.
+
+. errorcodes.conf
+
+usage () {
+	echo "$(basename $0) -H <hostaddress> -w <#sec> -c <#sec>"
+	exit $STATE_UNKNOWN
+}
+
+while getopts "H:w:c:" Option; do
+	case $Option in
+		H)
+			HOST=$OPTARG
+			;;
+		w)
+			WARNING=$OPTARG
+			;;
+		c)
+			CRITICAL=$OPTARG
+			;;
+		*)
+			usage
+			;;
+	esac
+done
+
+[ "$HOST" -a "$WARNING" -a "$CRITICAL" ] || usage
+
+if [ $WARNING -gt $CRITICAL ]; then
+	echo "Warning can't be larger than critical"
+	exit $STATE_UNKNOWN
+fi
+
+. $(dirname $0)/snmp-plugins.conf "none" || exit $STATE_UNKNOWN
+
+#==================================================================
+
+# Get the local date/time
+ldate=$(date +%s)
+
+# Now get the remote date/time
+output=$(snmpget -v2c -cpublic -Ov $HOST $MIB_DATECHECK)
+[ "$output" = "" ] && exit $STATE_UNKNOWN
+type=${output%:*}
+rdate=${output#${type}: }
+
+case "$type" in 
+	STRING)
+		[ $rdate -gt $ldate ] && difference=$((rdate - ldate)) || difference=$((ldate - rdate))
+		retcode=$STATE_OK
+		[ $difference -gt $WARNING ] && retcode=$STATE_WARNING
+		[ $difference -gt $CRITICAL ] && retcode=$STATE_CRITICAL
+		retmsg="difference with $(hostname -s) is $difference seconds"
+		;;
+	*)
+		retcode=$STATE_UNKNOWN
+		retmsg="return message = $(echo $output | sed 's/^[^=]*= //')"
+		;;
+esac
+
+echo $retmsg
+exit $retcode
+

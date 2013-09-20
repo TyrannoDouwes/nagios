@@ -1,0 +1,75 @@
+#!/bin/bash
+#
+# Nagios plugin to check the cache stats of a varnish server.
+# This script need the 'dc' command.
+
+# Load the settings for Nagios plugins. Needed here for the exit state variables.
+
+. errorcodes.conf
+
+. /usr/lib/nagios/plugins/utils.sh || exit 3
+
+usage () {
+	echo "$(basename $0) -H <hostaddress>"
+	exit $STATE_UNKNOWN
+}
+
+while getopts "H:" Option; do
+	case $Option in
+		H)
+			HOST=$OPTARG
+			;;
+		*)
+			usage
+			;;
+	esac
+done
+
+[ "$HOST" ] || usage
+
+. $(dirname $0)/snmp-plugins.conf "varnish_cache" || exit $STATE_UNKNOWN
+
+#==================================================================
+
+# Get the local date/time
+ldate=$(date +%s)
+
+# Now get the remote date/time
+output=$(snmpget -v2c -cpublic -Ov $HOST $MIB_VARNISH_CACHE)
+[ "$output" = "" ] && exit $STATE_UNKNOWN
+type=$(sed "s/\([^ ]*\).*$/\1/" <<<$output)
+result=$(sed "s/$type //" <<<$output)
+
+cache_hit=$(awk '{print $3;}' <<<$result)
+cache_hitpass=$(awk '{print $8;}' <<<$result)
+cache_miss=$(awk '{print $15;}' <<<$result)
+n_lru_nuked=$(awk '{print $19;}' <<<$result)
+hitrate=$(dc <<<"3k $cache_hit $cache_hit $cache_miss +/p")
+
+case "$type" in 
+	STRING:)
+		if [ $n_lru_nuked -eq 0 ]; then
+			retcode=$STATE_OK
+			retmsg="hitrate = ${hitrate} (hit: $cache_hit, hitpass: $cache_hitpass, miss: $cache_miss)"
+		else
+			retcode=$STATE_CRITICAL
+			retmsg="varnish is nuking objects ($n_lru_nuked), enlarge cache size"
+		fi
+		;;
+	*)
+		retcode=$STATE_UNKNOWN
+		retmsg="return message = $output"
+		;;
+esac
+
+#-------------------------------------------------------------------------------------
+# RRD stuff for nice graphics
+
+[ "$RRDFILE" ] && rrdtool update $RRDFILE N:${cache_hit}:${cache_hitpass}:${cache_miss} >/dev/null 2>&1
+
+#
+#-------------------------------------------------------------------------------------
+
+echo $retmsg
+exit $retcode
+

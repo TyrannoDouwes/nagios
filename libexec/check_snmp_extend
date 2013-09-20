@@ -1,0 +1,57 @@
+#!/bin/bash
+#
+# Nagios plugin to run a command on a remote server using SNMP.
+# SNMP syntax in snmpd.conf on the remote server:
+# extend <label> <command>
+
+. errorcodes.conf
+
+usage () {
+	echo "$(basename $0) -H <hostname> -e <extend>"
+	echo ""
+	exit $STATE_UNKNOWN
+}
+
+while getopts "H:e:" Option; do
+	case $Option in
+		H)
+			HOST=$OPTARG
+			;;
+		e)
+			EXTEND=$OPTARG
+			;;
+		*)
+			usage
+			;;
+	esac
+done
+
+[ "$HOST" -a "$EXTEND" ] || usage
+
+. $(dirname $0)/snmp-plugins.conf "none" || exit $STATE_UNKNOWN
+
+# Get the output of the extend
+# Some scripts take longer, so use a timeout of 10 seconds
+result=$(snmpget -v2c -cpublic -Ov -t 10 $HOST ${MIB_EXTEND_OUTPUT}.\"${EXTEND}\")
+[ "$result" = "" ] && exit $STATE_UNKNOWN
+type=${result%: *}
+
+# Get the exitcode of the extend
+exitcode=$(snmpget -v2c -cpublic -Ov $HOST ${MIB_EXTEND_EXITCODE}.\"${EXTEND}\")
+[ "$exitcode" = "" ] && exit $STATE_UNKNOWN
+retcode=${exitcode#*: }
+
+case "$type" in 
+	STRING)
+		retmsg=$(sed 's/^.*STRING://' <<<$result)
+		[ $retcode -gt 3 ] && retcode=$STATE_CRITICAL
+		;;
+	*)
+		retmsg=$(sed "s/${MIB_EXTEND}.[^=]* = //" <<<$result)
+		retcode=$STATE_UNKNOWN
+		;;
+esac
+
+echo $retmsg
+exit $retcode
+

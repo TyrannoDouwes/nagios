@@ -1,0 +1,75 @@
+#!/bin/bash
+#
+# Nagios plugin to check the swapspace on a remote server using SNMP.
+# The script will also store the values in a RRDtool database.
+
+. errorcodes.conf
+
+usage () {
+	echo "$(basename $0) -H <hostname> -w <% free> -c <% free>"
+	echo ""
+	echo "               -w WARNING if lower than %free"
+	echo "               -c CRITICAL if lower than %free"
+	exit $STATE_UNKNOWN
+}
+
+while getopts "H:w:c:" Option; do
+	case $Option in
+		H)
+			HOST=$OPTARG
+			;;
+		w)
+			WARNING=$OPTARG
+			;;
+		c)
+			CRITICAL=$OPTARG
+			;;
+		*)
+			usage
+			;;
+	esac
+done
+
+[ "$HOST" -a "$WARNING" -a "$CRITICAL" ] || usage
+
+if [ $WARNING -lt $CRITICAL ]; then
+	echo "WARNING can't be smaller than CRITICAL"
+	exit $STATE_UNKNOWN
+fi
+
+. $(dirname $0)/snmp-plugins.conf "swapspace" || exit $STATE_UNKNOWN
+
+#==================================================================
+
+# Get index for the requested partition.
+
+total=$(snmpget -v2c -cpublic -Ov $HOST $MIB_SWAPTOTAL | sed "s/INTEGER: \([0-9]*\).*$/\1/")
+[ "$total" = "" ] && $STATE_UNKNOWN
+free=$(snmpget -v2c -cpublic -Ov $HOST $MIB_SWAPFREE | sed "s/INTEGER: \([0-9]*\).*$/\1/")
+[ "$free" = "" ] && $STATE_UNKNOWN
+
+retcode=$STATE_OK
+
+if [ $total -eq 0 ]; then
+	retmsg="System has no swap"
+	usedpercentage=0
+else
+	freepercentage=$((free * 100 / $total))
+	usedpercentage=$((100 - freepercentage))
+
+	retmsg="Free swapspace: ${freepercentage}%"
+	[ $freepercentage -le $WARNING ] && retcode=$STATE_WARNING
+	[ $freepercentage -le $CRITICAL ] && retcode=$STATE_CRITICAL
+fi
+
+#-------------------------------------------------------------------------------------
+# RRD stuff for nice graphics
+
+[ "$RRDFILE" ] && rrdtool update $RRDFILE N:${usedpercentage} >/dev/null 2>&1
+
+#
+#-------------------------------------------------------------------------------------
+
+echo $retmsg
+exit $retcode
+

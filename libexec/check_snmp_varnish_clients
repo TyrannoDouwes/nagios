@@ -1,0 +1,76 @@
+#!/bin/bash
+#
+# Nagios plugin to check the client stats of a varnish server.
+
+# Load the settings for Nagios plugins. Needed here for the exit state variables.
+
+. errorcodes.conf
+
+usage () {
+	echo "$(basename $0) -H <hostaddress> -w <#sec> -c <#sec>"
+	exit $STATE_UNKNOWN
+}
+
+while getopts "H:w:c:" Option; do
+	case $Option in
+		H)
+			HOST=$OPTARG
+			;;
+		w)
+			WARNING=$OPTARG
+			;;
+		c)
+			CRITICAL=$OPTARG
+			;;
+		*)
+			usage
+			;;
+	esac
+done
+
+[ "$HOST" -a "$WARNING" -a "$CRITICAL" ] || usage
+
+if [ $WARNING -gt $CRITICAL ]; then
+	echo "Warning can't be larger than critical"
+	exit $STATE_UNKNOWN
+fi
+
+. $(dirname $0)/snmp-plugins.conf "varnish_clients" || exit $STATE_UNKNOWN
+
+#==================================================================
+
+# Get the local date/time
+ldate=$(date +%s)
+
+# Now get the remote date/time
+output=$(snmpget -v2c -cpublic -Ov $HOST $MIB_VARNISH_CLIENTS)
+[ "$output" = "" ] && exit $STATE_UNKNOWN
+type=$(sed "s/\([^ ]*\).*$/\1/" <<<$output)
+result=$(sed "s/$type //" <<<$output)
+
+client_conn=$(awk '{print $3;}' <<<$result)
+client_drop=$(awk '{print $9;}' <<<$result)
+client_req=$(awk '{print $16;}' <<<$result)
+
+case "$type" in 
+	STRING:)
+		retcode=$STATE_OK
+		retmsg="client_conn = $client_conn, client_req = $client_req, client_drop = $client_drop"
+		;;
+	*)
+		retcode=$STATE_UNKNOWN
+		retmsg="return message = $output"
+		;;
+esac
+
+#-------------------------------------------------------------------------------------
+# RRD stuff for nice graphics
+
+[ "$RRDFILE" ] && rrdtool update $RRDFILE N:${client_conn}:${client_drop}:${client_req} >/dev/null 2>&1
+
+#
+#-------------------------------------------------------------------------------------
+
+echo $retmsg
+exit $retcode
+

@@ -1,0 +1,47 @@
+#!/bin/bash
+
+. rrd-stats.conf create || exit 3
+
+# Genereer de grafieken voor de cpu load.
+# Zet een bovengrens voor de grafiek anders weet rrdtool niet hoe die de
+# Y-as moet schalen. Twee cpu's kan algauw een load van 2 geven, dus 2 is
+# een mooie bovengrens. Bij een eventuele overschrijding zal rrdtool de
+# schaal automatisch aanpassen.
+
+cd $STATSDIR
+files=$(ls *-memory.rrd 2>/dev/null)
+
+for rrdfile in $files; do
+
+	hostname=$(get_hostname $rrdfile)
+
+	titel=( "memory usage the past day" \
+		"memory usage the past week" \
+		"memory usage the past month")
+
+	filenaam=("${pngdir}/${hostname}-memory-day.png"	\
+		"${pngdir}/${hostname}-memory-week.png"	\
+		"${pngdir}/${hostname}-memory-month.png")
+
+	# Zet de header voor op de HTML pagina
+	echo "Memory usage" > ${pngdir}/${hostname}-memory.header
+
+	for i in 0 1 2; do
+		[ "$1" = "-v" ] && echo "creating graph ${filenaam[$i]}"
+
+		rrdtool graph ${filenaam[$i]}                            \
+			--start ${START_TIMES[$i]} --end $END_TIME       \
+			--vertical-label 'memory %'                      \
+			--title "${titel[$i]}"                           \
+			--height $GRAPH_HEIGHT                           \
+			--width $GRAPH_WIDTH                             \
+			--upper-limit 100                                \
+			--lower-limit 0                                  \
+			--rigid						 \
+			DEF:used=${rrdfile}:used:MAX                     \
+			DEF:cached=${rrdfile}:cached:MAX                 \
+			AREA:used#000000:"used":STACK                    \
+			AREA:cached#00FF00:"cache and buffers":STACK     >/dev/null
+	done
+done
+

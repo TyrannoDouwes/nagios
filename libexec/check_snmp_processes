@@ -1,0 +1,76 @@
+#!/bin/bash
+#
+# Nagios plugin to check if processes are running on a remote server using SNMP.
+# Process string example: apache2,cron,rsyslogd:1,memcached:10
+# the check will put an extra '/' in front of the processname to separate it from its children
+
+. errorcodes.conf
+
+TMPFILE="/tmp/check-snmp-processes.$$"
+
+usage () {
+	echo "$(basename $0) -H <hostname> -p <process1,process2:#>"
+	echo ""
+	echo "               -p processname without path"
+	echo "                  :# is number of processes that should be running"
+	exit $STATE_UNKNOWN
+}
+
+while getopts "H:p:" Option; do
+	case $Option in
+		H)
+			HOST=$OPTARG
+			;;
+		p)
+			PROCESSES="$(echo $OPTARG | sed 's/,/ /g')"
+			;;
+		*)
+			usage
+			;;
+	esac
+done
+
+[ "$HOST" -a "$PROCESSES" ] || usage
+
+. $(dirname $0)/snmp-plugins.conf "none" || exit $STATE_UNKNOWN
+
+#==================================================================
+
+msgrunning=""
+msgcritical="Not running:"
+retcode=$STATE_OK
+
+# Get the list of processes
+
+snmpwalk -v2c -cpublic -Ov $HOST $MIB_PROCESSES > $TMPFILE
+[ $? -ne 0 ] && exit $STATE_UNKNOWN
+
+# Check each process
+
+for process in $PROCESSES; do
+	processname=${process%:*}
+	[ "$process" != "$processname" ] && processnumber=${process#*:} || processnumber=0
+
+	number=$(grep -c "[/\"]$processname[\" ]" $TMPFILE)
+	if [ $processnumber -gt 0 ]; then
+		if [ $processnumber -ne $number ]; then
+			msgcritical="$msgcritical ${processname}[$processnumber]"
+			retcode=$STATE_CRITICAL
+		else
+			msgrunning="$msgrunning ${processname}[$number]"
+		fi
+	elif [ $number -eq 0 ]; then
+		msgcritical="$msgcritical ${processname}[$number]"
+		retcode=$STATE_CRITICAL
+	else
+		msgrunning="$msgrunning ${processname}[$number]"
+	fi
+done
+
+[ $retcode -eq $STATE_OK ] && retmsg="$msgrunning" || retmsg="$msgcritical"
+
+rm -f $TMPFILE
+
+echo $retmsg
+exit $retcode
+

@@ -1,0 +1,80 @@
+#!/bin/bash
+#
+# Nagios plugin to check the load on a remote server using SNMP.
+# The script will also store the values in a RRDtool database.
+
+. errorcodes.conf
+
+usage () {
+	echo "$(basename $0) -H <hostname> -w <#> -c <#>"
+	echo ""
+	echo "               -w WARNING levels for 1 minute load"
+	echo "               -c CRITICAL for 1 minute load"
+	exit $STATE_UNKNOWN
+}
+
+while getopts "H:w:c:" Option; do
+	case $Option in
+		H)
+			HOST=$OPTARG
+			;;
+		w)
+			WARNING=$OPTARG
+			w1=$(cut -d, -f1 <<<$WARNING)
+#			w2=$(cut -d, -f2 <<<$WARNING)
+#			w3=$(cut -d, -f3 <<<$WARNING)
+			;;
+		c)
+			CRITICAL=$OPTARG
+			c1=$(cut -d, -f1 <<<$WARNING)
+#			c2=$(cut -d, -f2 <<<$WARNING)
+#			c3=$(cut -d, -f3 <<<$WARNING)
+			;;
+		*)
+			usage
+			;;
+	esac
+done
+
+[ "$HOST" -a "$WARNING" -a "$CRITICAL" ] || usage
+
+if [ $w1 -gt $c1 ]; then
+	echo "WARNING can't be greater than CRITICAL"
+	exit $STATE_UNKNOWN
+fi
+
+. $(dirname $0)/snmp-plugins.conf "load" || exit $STATE_UNKNOWN
+
+#==================================================================
+
+# Get values for the load
+
+result1=$(snmpget -v2c -cpublic -Ov $HOST $MIB_LOAD1)
+[ "$result1" = "" ] && exit $STATE_UNKNOWN
+result2=$(snmpget -v2c -cpublic -Ov $HOST $MIB_LOAD5)
+[ "$result2" = "" ] && exit $STATE_UNKNOWN
+result3=$(snmpget -v2c -cpublic -Ov $HOST $MIB_LOAD15)
+[ "$result3" = "" ] && exit $STATE_UNKNOWN
+
+r1=${result1##STRING: }
+r2=${result2##STRING: }
+r3=${result3##STRING: }
+
+retmsg="load is $r1, $r2, $r3"
+
+#-------------------------------------------------------------------------------------
+# RRD stuff for nice graphics
+
+[ "$RRDFILE" ] && rrdtool update $RRDFILE N:${r1}:${r2}:${r3} >/dev/null 2>&1
+
+#
+#-------------------------------------------------------------------------------------
+
+r1=${r1%.*}
+[ $w1 -le $r1 ] && retcode=$STATE_WARNING
+[ $c1 -le $r1 ] && retcode=$STATE_CRITICAL
+
+
+echo $retmsg
+exit $retcode
+

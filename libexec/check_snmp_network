@@ -1,0 +1,73 @@
+#!/bin/bash
+#
+# Nagios plugin to check the diskspace on a remote server using SNMP.
+# The script will also store the values in a RRDtool database.
+
+. errorcodes.conf
+
+usage () {
+	echo "$(basename $0) -H <hostname> <if>"
+	echo ""
+	exit $STATE_UNKNOWN
+}
+
+while getopts "H:" Option; do
+	case $Option in
+		H)
+			HOST=$OPTARG
+			;;
+		*)
+			usage
+			;;
+	esac
+done
+
+shift $((OPTIND - 1))
+IFNAME=$1
+
+[ "$HOST" -a "$IFNAME" ] || usage
+
+. $(dirname $0)/snmp-plugins.conf "network" "$IFNAME" || exit $STATE_UNKNOWN
+
+#==================================================================
+
+# Get index for the requested interface.
+
+result=$(snmpwalk -v2c -cpublic $HOST $MIB_IFNAME | grep " $IFNAME$")
+[ $? -ne 0 ] && exit $STATE_UNKNOWN
+
+index=$(sed "s/^$MIB_IFNAME.\([0-9]*\).*$/\1/" <<<$result)
+
+
+# Now get the status of the interface
+
+status=$(snmpget -v2c -cpublic -Ov $HOST $MIB_IFUP.$index | sed 's/^.*INTEGER: \([^(]*\).*$/\1/')
+[ "$status" = "" ] && exit $STATE_UNKNOWN
+
+# Now get the RX and TX if the interface is up
+
+if [ "$status" = "up" ]; then
+	rx=$(snmpget -v2c -cpublic -Ov $HOST $MIB_RX.$index | sed 's/^.*Counter[0-9]*: //')
+	tx=$(snmpget -v2c -cpublic -Ov $HOST $MIB_TX.$index | sed 's/^.*Counter[0-9]*: //')
+	[ "$rx" = "" -o "$tx" = "" ] && exit $STATE_UNKNOWN
+	retmsg="$IFNAME is up, RX=$rx, TX=$tx"
+	retcode=$STATE_OK
+else
+	rx=0
+	tx=0
+	retmsg="$IFNAME is down"
+	retcode=$STATE_WARNING
+fi
+
+
+#-------------------------------------------------------------------------------------
+# RRD stuff for nice graphics
+
+[ "$RRDFILE"  ] && rrdtool update $RRDFILE  N:${rx}:${tx} >/dev/null 2>&1
+
+#
+#-------------------------------------------------------------------------------------
+
+echo $retmsg
+exit $retcode
+

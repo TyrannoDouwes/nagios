@@ -1,0 +1,75 @@
+#!/bin/bash
+#
+# This is the main script to create all graphs.
+
+graph_hight=200
+end_time=$(date +%s)
+one_day=$((3600 * 24))
+one_week=$((one_day * 7))
+one_month=$((one_week * 5))
+start_day=$((end_time - one_day))
+start_week=$((end_time - one_week))
+start_month=$((end_time - one_month))
+start_times=($start_day $start_week $start_month)
+
+pngdir="/var/www/monitoring/graphs"
+rrddir="/extra/nagios/rrd"
+myname=$(basename $0)
+
+export graph_hight start_day start_week start_month start_times end_time pngdir rrddir
+
+rm -f $pngdir/*.png
+
+# Generate all graphs
+
+for script in $(dirname $0)/rrd-create-*; do
+	scriptname=$(basename $script)
+	if [ "$scriptname" != "$myname" ]; then
+		[ "$1" = "-v" ] && echo "running script $script ..."
+		$script $1 2>/dev/null
+	fi
+done
+
+# Genereer de webpagina's
+
+cd $pngdir/..
+
+# Bouw de index pagina
+rm -f graphs-*.html
+cat - > graphs-index.html <<EOF
+<html>
+<head>
+<title>Server grafieken</title>
+</head>
+<body>
+EOF
+
+files=$(ls graphs/*.header 2>/dev/null)
+
+for file in $files; do
+	basedir=$(dirname $file)
+	hostname=$(basename $file)
+	hostname=${hostname%%-*}
+	graphname=$(basename $file .header)
+	[ "$1" = "-v" ] && echo "headerfile = $file, hostname = $hostname, filename = $graphname"
+
+	if [ ! -f graphs-${hostname}.html ]; then
+		# sluit de vorige pagina af
+		[ -n "$previous" ] && echo "</body></html>" >> graphs-${previous}.html
+		echo "<html><head><title>Monitoring $hostname</title></head><body>" >graphs-${hostname}.html
+		echo "<a href=\"graphs-${hostname}.html\">$hostname</a><br />" >> graphs-index.html
+	fi
+
+	header=$(cat $file)
+	echo "<h1>$header</h1>" >> graphs-${hostname}.html
+	echo "<img src=\"$basedir/${graphname}-day.png\">" >> graphs-${hostname}.html
+	echo "<img src=\"$basedir/${graphname}-week.png\">" >> graphs-${hostname}.html
+	echo "<img src=\"$basedir/${graphname}-month.png\"><br />" >> graphs-${hostname}.html
+
+	previous=$hostname
+
+	rm -f $file
+done
+
+echo "</body></html>" >> graphs-index.html
+

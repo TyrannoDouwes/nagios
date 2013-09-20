@@ -1,0 +1,46 @@
+#!/bin/bash
+
+. rrd-stats.conf create || exit 3
+
+# Genereer de grafieken voor de cpu load.
+# Zet een bovengrens voor de grafiek anders weet rrdtool niet hoe die de
+# Y-as moet schalen. Twee cpu's kan algauw een load van 2 geven, dus 2 is
+# een mooie bovengrens. Bij een eventuele overschrijding zal rrdtool de
+# schaal automatisch aanpassen.
+
+titel=( "CPU load the past day" \
+	"CPU load the past week" \
+	"CPU load the past month")
+
+cd $STATSDIR
+files=$(ls *-load.rrd 2>/dev/null)
+
+for rrdfile in $files; do
+
+	hostname=$(get_hostname $rrdfile)
+
+	filenaam=("${pngdir}/${hostname}-load-day.png"	\
+		"${pngdir}/${hostname}-load-week.png"	\
+		"${pngdir}/${hostname}-load-month.png")
+
+	echo "CPU load" > ${pngdir}/${hostname}-load.header
+
+	for i in 0 1 2; do
+		rrdtool graph ${filenaam[$i]}                 \
+		--start ${START_TIMES[$i]} --end $END_TIME    \
+		--vertical-label load                         \
+		--title "${titel[$i]}"                        \
+		--height $GRAPH_HEIGHT                        \
+		--width $GRAPH_WIDTH                          \
+		--upper-limit 1                               \
+		--lower-limit 0                               \
+		--rigid                                       \
+		DEF:load1=${rrdfile}:load1:MAX                \
+		DEF:load5=${rrdfile}:load5:MAX                \
+		DEF:load15=${rrdfile}:load15:MAX              \
+		LINE2:load1#FF0000:"load1"                    \
+		LINE2:load5#00FF00:"load5"                    \
+		LINE2:load15#0000FF:"load15"                  > /dev/null 2>&1
+	done
+done
+

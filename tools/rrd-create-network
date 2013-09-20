@@ -1,0 +1,50 @@
+#!/bin/bash
+#
+# Generate the graphs for the diskusage.
+# The RRD filename is expected to be:
+#   <hostname>-diskusage-<mountpoint>.rrd
+# The hostname can also be an IP address, but mixed names will not be combined.
+# In the mountpoint the '_' character will be replaced by a '/' character.
+
+. rrd-stats.conf create || exit 3
+
+cd $STATSDIR
+files=$(ls *-network-*.rrd)
+
+for rrdfile in $files; do
+
+	hostname=$(get_hostname $rrdfile)
+
+	# Get the name of the interface
+	interface=$(basename ${rrdfile#*-network-} .rrd)
+
+	# Set the titles and filenames for the graphs
+	titles=( "$NETWORKUSAGE_TITLE $fs the past day" \
+		"$NETWORKUSAGE_TITLE $fs the past week" \
+		"$NETWORKUSAGE_TITLE $fs the past month")
+
+	filenames=("${pngdir}/${hostname}-network-${interface}-day.png"	\
+		"${pngdir}/${hostname}-network-${interface}-week.png"	\
+		"${pngdir}/${hostname}-network-${interface}-month.png")
+
+	# Create a header for the webpage
+	echo "Network traffic of $interface" > ${pngdir}/${hostname}-network-${interface}.header
+
+	# Now create 3 graphs
+	for i in 0 1 2; do
+		[ "$1" = "-v" ] && echo "creating graph ${filenames[$i]}"
+
+		rrdtool graph ${filenames[$i]}                        \
+			--start ${START_TIMES[$i]} --end $END_TIME    \
+			--vertical-label traffic                      \
+			--title "${titles[$i]}"                       \
+			--height $GRAPH_HEIGHT                        \
+			--width $GRAPH_WIDTH                          \
+			--lower-limit 0                               \
+			DEF:rx=${rrdfile}:rx:MAX                      \
+			DEF:tx=${rrdfile}:tx:MAX                      \
+			LINE2:rx#000000:"RX"                          \
+			LINE2:tx#00FF00:"TX"                          > /dev/null 2>&1
+	done
+done
+
